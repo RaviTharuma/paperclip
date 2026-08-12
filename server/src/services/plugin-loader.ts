@@ -60,14 +60,54 @@ export const STANDALONE_BUNDLED_PLUGIN_ROOT = path.join(BUNDLED_LOCAL_PLUGIN_ROO
 export const LOCAL_PLUGIN_AUTOBUILD_TIMEOUT_MS = 120_000;
 const STANDALONE_BUNDLED_PLUGIN_SDK_PACKAGE = "@paperclipai/plugin-sdk";
 
-const FRESH_MANIFEST_LOADER_SCRIPT = `
+/**
+ * Short-lived Node script used by {@link loadFreshManifestModule}.
+ *
+ * Writes the imported manifest to an output file path (argv[2]) instead of
+ * stdout. That keeps the JSON transport isolated from incidental
+ * `console.log` / `process.stdout.write` output during module evaluation.
+ */
+export const FRESH_MANIFEST_LOADER_SCRIPT = `
 import { pathToFileURL } from "node:url";
+import { writeFileSync } from "node:fs";
 
 const manifestPath = process.argv[1];
+const outputPath = process.argv[2];
 const mod = await import(pathToFileURL(manifestPath).href);
 const raw = mod.default ?? mod;
-process.stdout.write(JSON.stringify(raw));
+writeFileSync(outputPath, JSON.stringify(raw), "utf8");
 `;
+
+/**
+ * Import a plugin manifest module in an isolated Node subprocess and return
+ * the raw export. Used for local-path upgrades so rebuilt ESM/CJS manifests
+ * are re-read without host process module-cache reuse.
+ *
+ * The child writes JSON to a temp file rather than stdout so evaluation-time
+ * stdout noise cannot corrupt the transport.
+ */
+export async function loadFreshManifestModule(manifestPath: string): Promise<unknown> {
+  const outputPath = path.join(
+    os.tmpdir(),
+    `paperclip-fresh-manifest-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+  );
+
+  try {
+    await execFileAsync(
+      process.execPath,
+      ["--input-type=module", "-e", FRESH_MANIFEST_LOADER_SCRIPT, manifestPath, outputPath],
+      { timeout: 15_000, maxBuffer: 1024 * 1024 },
+    );
+    const payload = await readFile(outputPath, "utf8");
+    return JSON.parse(payload) as unknown;
+  } catch (err) {
+    throw new Error(
+      `Failed to load fresh manifest module at ${manifestPath}: ${String(err)}`,
+    );
+  } finally {
+    await rm(outputPath, { force: true }).catch(() => undefined);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1354,19 +1394,7 @@ export function pluginLoader(
     let raw: unknown;
 
     if (fresh) {
-      try {
-        const { stdout } = await execFileAsync(
-          process.execPath,
-          ["--input-type=module", "-e", FRESH_MANIFEST_LOADER_SCRIPT, manifestPath],
-          { timeout: 15_000, maxBuffer: 1024 * 1024 },
-        );
-        raw = JSON.parse(stdout);
-      } catch (err) {
-        throw new Error(
-          `Failed to load fresh manifest module at ${manifestPath}: ${String(err)}`,
-        );
-      }
-
+      raw = await loadFreshManifestModule(manifestPath);
       return manifestValidator.parseOrThrow(raw);
     }
 
