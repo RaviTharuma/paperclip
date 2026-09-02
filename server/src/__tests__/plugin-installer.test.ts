@@ -103,7 +103,13 @@ describe("mergeIgnoreScriptsNpmrc", () => {
 
   it("forces ignore-scripts=true when already present", () => {
     expect(mergeIgnoreScriptsNpmrc("ignore-scripts=false\nregistry=https://registry.npmjs.org/\n")).toBe(
-      "ignore-scripts=true\nregistry=https://registry.npmjs.org/\n",
+      "registry=https://registry.npmjs.org/\nignore-scripts=true\n",
     );
+  });
+
+  it("rewrites a trailing ignore-scripts=false so the last npm assignment stays true", () => {
+    expect(
+      mergeIgnoreScriptsNpmrc("ignore-scripts=true\nregistry=https://registry.npmjs.org/\nignore-scripts=false\n"),
+    ).toBe("registry=https://registry.npmjs.org/\nignore-scripts=true\n");
   });
 });

@@ -105,12 +105,15 @@ export function planPluginInstall(
 
 export const NPMRC_IGNORE_SCRIPTS = "ignore-scripts=true\n";
 
-/** Keep existing prefix .npmrc keys; only set ignore-scripts=true. */
+/** Keep existing prefix .npmrc keys; force every ignore-scripts assignment to true.
+ * npm uses the last duplicate key, so rewriting only the first line is not enough.
+ */
 export function mergeIgnoreScriptsNpmrc(existing: string): string {
   const text = existing.replace(/\r\n/g, "\n");
-  if (/(^|\n)ignore-scripts\s*=/im.test(text)) {
-    return text.replace(/(^|\n)ignore-scripts\s*=.*$/im, "$1ignore-scripts=true") + (text.endsWith("\n") ? "" : "\n");
-  }
-  const trimmed = text.replace(/\s+$/g, "");
-  return (trimmed ? trimmed + "\n" : "") + NPMRC_IGNORE_SCRIPTS;
+  const without = text
+    .split("\n")
+    .filter((line) => !/^ignore-scripts\s*=/i.test(line.trim()))
+    .join("\n")
+    .replace(/\s+$/g, "");
+  return (without ? without + "\n" : "") + NPMRC_IGNORE_SCRIPTS;
 }
