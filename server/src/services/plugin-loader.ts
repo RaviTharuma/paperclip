@@ -51,7 +51,11 @@ import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import type { PluginLifecycleManager } from "./plugin-lifecycle.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { resolveBundledCatalogRoot } from "./bundled-plugins.js";
-import { planPluginInstall, mergeIgnoreScriptsNpmrc } from "./plugin-installer.js";
+import {
+  planPluginInstall,
+  mergeIgnoreScriptsNpmrc,
+  pluginInstallChildEnv,
+} from "./plugin-installer.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1230,7 +1234,7 @@ export function pluginLoader(
 
       log.info(
         { spec, installDir: targetInstallDir },
-        "plugin-loader: fetching plugin from npm",
+        "plugin-loader: fetching plugin package",
       );
 
       const plan = planPluginInstall(spec, targetInstallDir);
@@ -1253,7 +1257,10 @@ export function pluginLoader(
           { spec, installDir: targetInstallDir, manager: plan.manager, command: plan.command },
           "plugin-loader: installing plugin package",
         );
-        await execFileAsync(plan.command, plan.args, { timeout: 120_000 });
+        await execFileAsync(plan.command, plan.args, {
+          timeout: 120_000,
+          env: pluginInstallChildEnv(),
+        });
       } catch (err) {
         throw new Error(`${plan.manager} install failed for ${spec}: ${String(err)}`);
       }
