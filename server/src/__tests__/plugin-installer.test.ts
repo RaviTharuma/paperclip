@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  mergeIgnoreScriptsNpmrc,
   planPluginInstall,
   resolvePluginPackageManager,
 } from "../services/plugin-installer.js";
@@ -36,5 +37,24 @@ describe("plugin installer package manager", () => {
     expect(
       resolvePluginPackageManager({ PAPERCLIP_PLUGIN_PACKAGE_MANAGER: "bun" }, () => false),
     ).toBe("bun");
+  });
+});
+
+describe("mergeIgnoreScriptsNpmrc", () => {
+  it("writes ignore-scripts into an empty file", () => {
+    expect(mergeIgnoreScriptsNpmrc("")).toBe("ignore-scripts=true\n");
+  });
+
+  it("keeps registry and auth keys", () => {
+    const out = mergeIgnoreScriptsNpmrc("@scope:registry=https://npm.example/\n//npm.example/:_authToken=secret\n");
+    expect(out).toContain("@scope:registry=https://npm.example/");
+    expect(out).toContain("//npm.example/:_authToken=secret");
+    expect(out).toContain("ignore-scripts=true");
+  });
+
+  it("forces ignore-scripts=true when already present", () => {
+    expect(mergeIgnoreScriptsNpmrc("ignore-scripts=false\nregistry=https://registry.npmjs.org/\n")).toBe(
+      "ignore-scripts=true\nregistry=https://registry.npmjs.org/\n",
+    );
   });
 });

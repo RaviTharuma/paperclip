@@ -51,7 +51,7 @@ import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import type { PluginLifecycleManager } from "./plugin-lifecycle.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { resolveBundledCatalogRoot } from "./bundled-plugins.js";
-import { planPluginInstall, NPMRC_IGNORE_SCRIPTS } from "./plugin-installer.js";
+import { planPluginInstall, mergeIgnoreScriptsNpmrc } from "./plugin-installer.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1240,7 +1240,14 @@ export function pluginLoader(
         // (npm 12 rejects CLI --ignore-scripts on project-scoped installs: EALLOWSCRIPTS).
         await mkdir(targetInstallDir, { recursive: true });
         if (plan.manager === "npm") {
-          await writeFile(path.join(targetInstallDir, ".npmrc"), NPMRC_IGNORE_SCRIPTS);
+          const npmrcPath = path.join(targetInstallDir, ".npmrc");
+          let existing = "";
+          try {
+            existing = await readFile(npmrcPath, "utf8");
+          } catch {
+            existing = "";
+          }
+          await writeFile(npmrcPath, mergeIgnoreScriptsNpmrc(existing));
         }
         log.info(
           { spec, installDir: targetInstallDir, manager: plan.manager, command: plan.command },

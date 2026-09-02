@@ -72,3 +72,13 @@ export function planPluginInstall(
 }
 
 export const NPMRC_IGNORE_SCRIPTS = "ignore-scripts=true\n";
+
+/** Keep existing prefix .npmrc keys; only set ignore-scripts=true. */
+export function mergeIgnoreScriptsNpmrc(existing: string): string {
+  const text = existing.replace(/\r\n/g, "\n");
+  if (/(^|\n)ignore-scripts\s*=/im.test(text)) {
+    return text.replace(/(^|\n)ignore-scripts\s*=.*$/im, "$1ignore-scripts=true") + (text.endsWith("\n") ? "" : "\n");
+  }
+  const trimmed = text.replace(/\s+$/g, "");
+  return (trimmed ? trimmed + "\n" : "") + NPMRC_IGNORE_SCRIPTS;
+}
