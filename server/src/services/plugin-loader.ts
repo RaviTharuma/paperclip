@@ -25,7 +25,7 @@
  * @see PLUGIN_SPEC.md §12 — Process Model
  */
 import { existsSync } from "node:fs";
-import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { readdir, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,7 @@ import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import type { PluginLifecycleManager } from "./plugin-lifecycle.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { resolveBundledCatalogRoot } from "./bundled-plugins.js";
+import { planPluginInstall, NPMRC_IGNORE_SCRIPTS } from "./plugin-installer.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1234,15 +1235,20 @@ export function pluginLoader(
 
       try {
         // Use execFile (not exec) to avoid shell injection from package name/version.
-        // --ignore-scripts prevents preinstall/install/postinstall hooks from
-        // executing arbitrary code on the host before manifest validation.
-        await execFileAsync(
-          "npm",
-          ["install", spec, "--prefix", targetInstallDir, "--save", "--ignore-scripts"],
-          { timeout: 120_000 }, // 2 minute timeout for npm install
+        // Scripts stay disabled: bun --ignore-scripts, or npm via prefix .npmrc
+        // (npm 12 rejects CLI --ignore-scripts on project-scoped installs: EALLOWSCRIPTS).
+        await mkdir(targetInstallDir, { recursive: true });
+        const plan = planPluginInstall(spec, targetInstallDir);
+        if (plan.manager === "npm") {
+          await writeFile(path.join(targetInstallDir, ".npmrc"), NPMRC_IGNORE_SCRIPTS);
+        }
+        log.info(
+          { spec, installDir: targetInstallDir, manager: plan.manager, command: plan.command },
+          "plugin-loader: installing plugin package",
         );
+        await execFileAsync(plan.command, plan.args, { timeout: 120_000 });
       } catch (err) {
-        throw new Error(`npm install failed for ${spec}: ${String(err)}`);
+        throw new Error(`plugin install failed for ${spec}: ${String(err)}`);
       }
 
       // Resolve the package path after installation
