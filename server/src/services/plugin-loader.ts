@@ -1233,12 +1233,12 @@ export function pluginLoader(
         "plugin-loader: fetching plugin from npm",
       );
 
+      const plan = planPluginInstall(spec, targetInstallDir);
       try {
         // Use execFile (not exec) to avoid shell injection from package name/version.
         // Scripts stay disabled: bun --ignore-scripts, or npm via prefix .npmrc
         // (npm 12 rejects CLI --ignore-scripts on project-scoped installs: EALLOWSCRIPTS).
         await mkdir(targetInstallDir, { recursive: true });
-        const plan = planPluginInstall(spec, targetInstallDir);
         if (plan.manager === "npm") {
           await writeFile(path.join(targetInstallDir, ".npmrc"), NPMRC_IGNORE_SCRIPTS);
         }
@@ -1248,7 +1248,7 @@ export function pluginLoader(
         );
         await execFileAsync(plan.command, plan.args, { timeout: 120_000 });
       } catch (err) {
-        throw new Error(`plugin install failed for ${spec}: ${String(err)}`);
+        throw new Error(`${plan.manager} install failed for ${spec}: ${String(err)}`);
       }
 
       // Resolve the package path after installation
