@@ -5,7 +5,9 @@
  * That breaks npm 12 (EALLOWSCRIPTS) and ignores Bun even when the operator
  * runs the CLI via bun.
  */
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type PluginPackageManager = "bun" | "npm";
@@ -116,4 +118,43 @@ export function mergeIgnoreScriptsNpmrc(existing: string): string {
     .join("\n")
     .replace(/\s+$/g, "");
   return (without ? without + "\n" : "") + NPMRC_IGNORE_SCRIPTS;
+}
+
+/**
+ * Replace `filePath` by writing a sibling temp file, then renaming over the
+ * live path. A crash during the temp write cannot truncate existing contents.
+ */
+export async function writeFileAtomic(filePath: string, contents: string): Promise<void> {
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.tmp-${process.pid}-${randomUUID()}`,
+  );
+  try {
+    await writeFile(tempPath, contents, { encoding: "utf8", flag: "wx" });
+    await rename(tempPath, filePath);
+  } catch (err) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * Force `ignore-scripts=true` in the plugin-prefix `.npmrc` without replacing
+ * registry/auth/proxy keys. The write is atomic so a crash cannot leave an
+ * empty or partial shared config.
+ */
+export async function ensureIgnoreScriptsNpmrc(prefixDir: string): Promise<void> {
+  const npmrcPath = path.join(prefixDir, ".npmrc");
+  let existing = "";
+  try {
+    existing = await readFile(npmrcPath, "utf8");
+  } catch (err) {
+    // Only treat missing files as empty. Other read failures (EACCES,
+    // EISDIR, etc.) must not wipe registry/auth/proxy settings on write.
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
+  await writeFileAtomic(npmrcPath, mergeIgnoreScriptsNpmrc(existing));
 }

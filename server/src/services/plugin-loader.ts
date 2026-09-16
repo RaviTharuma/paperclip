@@ -25,7 +25,7 @@
  * @see PLUGIN_SPEC.md §12 — Process Model
  */
 import { existsSync } from "node:fs";
-import { readdir, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, rm, stat, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -53,7 +53,7 @@ import { pluginDatabaseService } from "./plugin-database.js";
 import { resolveBundledCatalogRoot } from "./bundled-plugins.js";
 import {
   planPluginInstall,
-  mergeIgnoreScriptsNpmrc,
+  ensureIgnoreScriptsNpmrc,
   pluginInstallChildEnv,
 } from "./plugin-installer.js";
 
@@ -1247,20 +1247,7 @@ export function pluginLoader(
         // (npm 12 rejects CLI --ignore-scripts on project-scoped installs: EALLOWSCRIPTS).
         await mkdir(targetInstallDir, { recursive: true });
         if (plan.manager === "npm") {
-          const npmrcPath = path.join(targetInstallDir, ".npmrc");
-          let existing = "";
-          try {
-            existing = await readFile(npmrcPath, "utf8");
-          } catch (err) {
-            // Only treat missing files as empty. Other read failures (EACCES,
-            // EISDIR, etc.) must not wipe registry/auth/proxy settings on write.
-            const code = (err as NodeJS.ErrnoException | undefined)?.code;
-            if (code !== "ENOENT") {
-              throw err;
-            }
-            existing = "";
-          }
-          await writeFile(npmrcPath, mergeIgnoreScriptsNpmrc(existing));
+          await ensureIgnoreScriptsNpmrc(targetInstallDir);
         }
         log.info(
           { spec, installDir: targetInstallDir, manager: plan.manager, command: plan.command },

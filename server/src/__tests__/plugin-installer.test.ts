@@ -1,14 +1,16 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertSafePluginSpec,
   commandOnPath,
+  ensureIgnoreScriptsNpmrc,
   mergeIgnoreScriptsNpmrc,
   planPluginInstall,
   pluginInstallChildEnv,
   resolvePluginPackageManager,
+  writeFileAtomic,
 } from "../services/plugin-installer.js";
 
 describe("plugin installer package manager", () => {
@@ -111,5 +113,78 @@ describe("mergeIgnoreScriptsNpmrc", () => {
     expect(
       mergeIgnoreScriptsNpmrc("ignore-scripts=true\nregistry=https://registry.npmjs.org/\nignore-scripts=false\n"),
     ).toBe("registry=https://registry.npmjs.org/\nignore-scripts=true\n");
+  });
+});
+
+describe("writeFileAtomic", () => {
+  it("replaces the target via a sibling temp file then rename", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-atomic-"));
+    try {
+      const target = path.join(dir, ".npmrc");
+      writeFileSync(target, "registry=https://npm.example/\n_authToken=old-secret\n");
+
+      await writeFileAtomic(target, "registry=https://npm.example/\n_authToken=old-secret\nignore-scripts=true\n");
+
+      expect(readFileSync(target, "utf8")).toBe(
+        "registry=https://npm.example/\n_authToken=old-secret\nignore-scripts=true\n",
+      );
+      expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the live file intact when the sibling temp cannot be created", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-crash-"));
+    const target = path.join(dir, ".npmrc");
+    const original = "@scope:registry=https://npm.example/\n//npm.example/:_authToken=secret\n";
+    writeFileSync(target, original);
+    chmodSync(dir, 0o555);
+    try {
+      await expect(writeFileAtomic(target, "ignore-scripts=true\n")).rejects.toThrow();
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    expect(readFileSync(target, "utf8")).toBe(original);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("ensureIgnoreScriptsNpmrc", () => {
+  it("creates prefix .npmrc with ignore-scripts when missing", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-missing-"));
+    try {
+      await ensureIgnoreScriptsNpmrc(dir);
+      expect(readFileSync(path.join(dir, ".npmrc"), "utf8")).toBe("ignore-scripts=true\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges ignore-scripts without dropping registry or auth keys", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-merge-"));
+    try {
+      writeFileSync(
+        path.join(dir, ".npmrc"),
+        "@scope:registry=https://npm.example/\n//npm.example/:_authToken=secret\n",
+      );
+      await ensureIgnoreScriptsNpmrc(dir);
+      const out = readFileSync(path.join(dir, ".npmrc"), "utf8");
+      expect(out).toContain("@scope:registry=https://npm.example/");
+      expect(out).toContain("//npm.example/:_authToken=secret");
+      expect(out).toContain("ignore-scripts=true");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates non-ENOENT read failures instead of wiping the prefix config", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-eisdir-"));
+    try {
+      mkdirSync(path.join(dir, ".npmrc"));
+      await expect(ensureIgnoreScriptsNpmrc(dir)).rejects.toMatchObject({ code: "EISDIR" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
