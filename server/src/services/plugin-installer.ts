@@ -7,8 +7,11 @@
  */
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+/** Owner-only default for new prefix `.npmrc` files that may hold registry credentials. */
+export const DEFAULT_NPMRC_MODE = 0o600;
 
 export type PluginPackageManager = "bun" | "npm";
 
@@ -121,16 +124,39 @@ export function mergeIgnoreScriptsNpmrc(existing: string): string {
 }
 
 /**
+ * Read the existing target mode, or `undefined` when the path is missing.
+ * Non-ENOENT stat failures propagate so we fail closed instead of replacing
+ * a credential file with a weaker umask-derived mode.
+ */
+async function existingFileMode(filePath: string): Promise<number | undefined> {
+  try {
+    return (await stat(filePath)).mode & 0o777;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+/**
  * Replace `filePath` by writing a sibling temp file, then renaming over the
  * live path. A crash during the temp write cannot truncate existing contents.
+ *
+ * The replacement inode copies the existing file mode (e.g. 0600 for
+ * registry credentials). New files default to {@link DEFAULT_NPMRC_MODE}.
+ * `chmod` is applied on the temp path before rename so umask cannot widen
+ * the mode across the swap.
  */
 export async function writeFileAtomic(filePath: string, contents: string): Promise<void> {
   const tempPath = path.join(
     path.dirname(filePath),
     `.${path.basename(filePath)}.tmp-${process.pid}-${randomUUID()}`,
   );
+  const mode = (await existingFileMode(filePath)) ?? DEFAULT_NPMRC_MODE;
   try {
-    await writeFile(tempPath, contents, { encoding: "utf8", flag: "wx" });
+    await writeFile(tempPath, contents, { encoding: "utf8", flag: "wx", mode });
+    // writeFile creation modes are umask-masked; chmod applies the exact mode.
+    await chmod(tempPath, mode);
     await rename(tempPath, filePath);
   } catch (err) {
     await rm(tempPath, { force: true }).catch(() => undefined);
@@ -141,7 +167,8 @@ export async function writeFileAtomic(filePath: string, contents: string): Promi
 /**
  * Force `ignore-scripts=true` in the plugin-prefix `.npmrc` without replacing
  * registry/auth/proxy keys. The write is atomic so a crash cannot leave an
- * empty or partial shared config.
+ * empty or partial shared config, and existing file modes (e.g. 0600) are
+ * preserved so credentials stay owner-only.
  */
 export async function ensureIgnoreScriptsNpmrc(prefixDir: string): Promise<void> {
   const npmrcPath = path.join(prefixDir, ".npmrc");

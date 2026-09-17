@@ -1,10 +1,11 @@
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertSafePluginSpec,
   commandOnPath,
+  DEFAULT_NPMRC_MODE,
   ensureIgnoreScriptsNpmrc,
   mergeIgnoreScriptsNpmrc,
   planPluginInstall,
@@ -12,6 +13,10 @@ import {
   resolvePluginPackageManager,
   writeFileAtomic,
 } from "../services/plugin-installer.js";
+
+function fileMode(filePath: string): number {
+  return statSync(filePath).mode & 0o777;
+}
 
 describe("plugin installer package manager", () => {
   it("prefers bun when bun is on PATH", () => {
@@ -148,6 +153,49 @@ describe("writeFileAtomic", () => {
     expect(readFileSync(target, "utf8")).toBe(original);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("preserves an existing 0600 mode so registry credentials stay owner-only", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-mode-"));
+    try {
+      const target = path.join(dir, ".npmrc");
+      writeFileSync(target, "registry=https://npm.example/\n_authToken=secret\n", { mode: 0o600 });
+      chmodSync(target, 0o600);
+      expect(fileMode(target)).toBe(0o600);
+
+      await writeFileAtomic(target, "registry=https://npm.example/\n_authToken=secret\nignore-scripts=true\n");
+
+      expect(fileMode(target)).toBe(0o600);
+      expect(readFileSync(target, "utf8")).toContain("ignore-scripts=true");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a non-default existing mode instead of forcing 0600", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-mode-640-"));
+    try {
+      const target = path.join(dir, ".npmrc");
+      writeFileSync(target, "registry=https://npm.example/\n", { mode: 0o640 });
+      chmodSync(target, 0o640);
+
+      await writeFileAtomic(target, "registry=https://npm.example/\nignore-scripts=true\n");
+
+      expect(fileMode(target)).toBe(0o640);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a missing file with owner-only 0600", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-new-mode-"));
+    try {
+      const target = path.join(dir, ".npmrc");
+      await writeFileAtomic(target, "ignore-scripts=true\n");
+      expect(fileMode(target)).toBe(DEFAULT_NPMRC_MODE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("ensureIgnoreScriptsNpmrc", () => {
@@ -155,7 +203,9 @@ describe("ensureIgnoreScriptsNpmrc", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-missing-"));
     try {
       await ensureIgnoreScriptsNpmrc(dir);
-      expect(readFileSync(path.join(dir, ".npmrc"), "utf8")).toBe("ignore-scripts=true\n");
+      const npmrcPath = path.join(dir, ".npmrc");
+      expect(readFileSync(npmrcPath, "utf8")).toBe("ignore-scripts=true\n");
+      expect(fileMode(npmrcPath)).toBe(DEFAULT_NPMRC_MODE);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -164,15 +214,19 @@ describe("ensureIgnoreScriptsNpmrc", () => {
   it("merges ignore-scripts without dropping registry or auth keys", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "paperclip-npmrc-merge-"));
     try {
+      const npmrcPath = path.join(dir, ".npmrc");
       writeFileSync(
-        path.join(dir, ".npmrc"),
+        npmrcPath,
         "@scope:registry=https://npm.example/\n//npm.example/:_authToken=secret\n",
+        { mode: 0o600 },
       );
+      chmodSync(npmrcPath, 0o600);
       await ensureIgnoreScriptsNpmrc(dir);
-      const out = readFileSync(path.join(dir, ".npmrc"), "utf8");
+      const out = readFileSync(npmrcPath, "utf8");
       expect(out).toContain("@scope:registry=https://npm.example/");
       expect(out).toContain("//npm.example/:_authToken=secret");
       expect(out).toContain("ignore-scripts=true");
+      expect(fileMode(npmrcPath)).toBe(0o600);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
